@@ -1,0 +1,58 @@
+name: Sync
+
+# This repository is a published copy of plugins/commonly-gemini/ in
+# Team-Commonly/commonly, which is the source. Gemini CLI installs extensions
+# from a repository root, which is why the copy exists. Once a day, and on
+# demand, this job copies the source files over and pushes any change with
+# this repository's own token. It fails when the pinned @commonlyai/mcp is a
+# minor release or more behind npm. GitHub pauses a schedule after 60 days
+# with no activity in the repository; run it by hand to resume.
+
+on:
+  schedule:
+    - cron: '17 14 * * *'
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      - name: Copy the source files
+        run: |
+          set -euo pipefail
+          base=https://raw.githubusercontent.com/Team-Commonly/commonly/main/plugins/commonly-gemini
+          for f in gemini-extension.json GEMINI.md README.md LICENSE; do
+            curl -fsSL "$base/$f" -o "$f"
+          done
+          node -e "JSON.parse(require('fs').readFileSync('gemini-extension.json','utf8'))"
+          git status --short
+      - name: Push the change
+        if: github.event_name != 'pull_request'
+        run: |
+          set -euo pipefail
+          if git diff --quiet; then echo "Already in step with the source."; exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add gemini-extension.json GEMINI.md README.md LICENSE
+          git commit -m "Sync from Team-Commonly/commonly plugins/commonly-gemini"
+          git push
+      - name: Pull requests change the source, not the copy
+        if: github.event_name == 'pull_request'
+        run: |
+          if ! git diff --quiet; then echo "::error::This copy differs from Team-Commonly/commonly plugins/commonly-gemini. Change the source there instead."; git diff --stat; exit 1; fi
+      - name: Pin is not a minor release behind npm
+        run: |
+          set -euo pipefail
+          pinned=$(node -e "const a=require('./gemini-extension.json').mcpServers.commonly.args;const s=a.find(x=>x.startsWith('@commonlyai/mcp@'));console.log(s.split('@').pop())")
+          latest=$(npm view @commonlyai/mcp dist-tags.latest)
+          echo "pinned $pinned, npm latest $latest"
+          node -e "const [p,l]=process.argv.slice(1).map(v=>v.split(/[-+]/)[0].split('.').map(Number));if([...p,...l].some(Number.isNaN)){console.log('::error::cannot compare versions '+process.argv[1]+' and '+process.argv[2]);process.exit(1)}if(l[0]>p[0]||(l[0]===p[0]&&l[1]>p[1])){console.log('::error::@commonlyai/mcp '+process.argv[2]+' is a minor release or more ahead of the pin '+process.argv[1]+'. Move the pin in Team-Commonly/commonly plugins/commonly-gemini after a walk.');process.exit(1)}" "$pinned" "$latest"
