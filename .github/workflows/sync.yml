@@ -6,7 +6,7 @@ name: Sync
 # demand, this job copies the source files over and pushes any change with
 # this repository's own token. It fails when the pinned @commonlyai/mcp is a
 # minor release or more behind npm. GitHub pauses a schedule after 60 days
-# with no activity in the repository; run it by hand to resume.
+# without a commit, so an in-step copy pushes an empty commit at 50 days.
 
 on:
   schedule:
@@ -39,12 +39,22 @@ jobs:
         if: github.event_name != 'pull_request'
         run: |
           set -euo pipefail
-          if git diff --quiet; then echo "Already in step with the source."; exit 0; fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add gemini-extension.json GEMINI.md README.md LICENSE
-          git commit -m "Sync from Team-Commonly/commonly plugins/commonly-gemini"
-          git push
+          if ! git diff --quiet; then
+            git add gemini-extension.json GEMINI.md README.md LICENSE
+            git commit -m "Sync from Team-Commonly/commonly plugins/commonly-gemini"
+            git push
+            exit 0
+          fi
+          echo "Already in step with the source."
+          # GitHub disables this schedule after 60 days without a commit, and
+          # an in-step copy makes none. Keep it alive with an empty commit.
+          age_days=$(( ( $(date +%s) - $(git log -1 --format=%ct) ) / 86400 ))
+          if [ "$age_days" -ge 50 ]; then
+            git commit --allow-empty -m "Keep the daily sync schedule active"
+            git push
+          fi
       - name: Pull requests change the source, not the copy
         if: github.event_name == 'pull_request'
         run: |
